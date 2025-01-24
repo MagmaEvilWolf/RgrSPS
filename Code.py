@@ -1,57 +1,117 @@
-import telebot
-from telebot import types
-import webbrowser
-from pyexpat.errors import messages
-
-bot = telebot.TeleBot('7279406794:AAHEuoNDMpkOC6cKRwP2emufano1Df5X1eM')
-
-#@bot.message_handler(commands=['site','website'])
-#def site(messages):
-    #webbrowser.open('')
-
-#@bot.message_handler(commands=['start'])
-#def start(message):
+from telegram import Update, InputFile
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import pandas as pd
+import plotly.express as px
+import io
+import os
+import asyncio
+import plotly.io as pio
 
 
+# Функция для обработки CSV файла и генерации графиков
+def generate_graphs_from_csv(file):
+    df = pd.read_csv(file)
+    df['Дата'] = pd.to_datetime(df['Дата'])
+    df.set_index('Дата', inplace=True)
+
+    # Генерация графиков
+    figures = []
+    total_sales_fig = px.bar(
+        df.resample('M').sum().reset_index(),
+        x='Дата',
+        y='Сумма',
+        title='Общие продажи по месяцам',
+        template='plotly_dark'
+    )
+
+    sales_by_category_fig = px.pie(
+        df,
+        names='Категория',
+        values='Сумма',
+        title='Продажи по категориям',
+        template='plotly_dark'
+    )
+
+    quantity_sold_fig = px.line(
+        df.resample('D').sum().reset_index(),
+        x='Дата',
+        y='Количество',
+        title='Количество проданных товаров по датам',
+        template='plotly_dark'
+    )
+
+    monthly_sales_fig = px.area(
+        df.resample('M').sum().reset_index(),
+        x='Дата',
+        y='Сумма',
+        title='Продажи по месяцам',
+        template='plotly_dark'
+    )
+
+    top_products_fig = px.bar(
+        df.groupby('Товар')['Количество'].sum().nlargest(5).reset_index(),
+        x='Количество',
+        y='Товар',
+        orientation='h',
+        title='Топ-5 товаров по количеству проданных единиц',
+        template='plotly_dark'
+    )
 
 
-@bot.message_handler(content_types=['photo', 'document'])
-def get_photo(message):
-    markup =types.InlineKeyboardMarkup()
-    btn1= types.InlineKeyboardButton('Перейти по сылке откуда знания',url='https://www.youtube.com/watch?v=RpiWnPNTeww&list=PL0lO_mIqDDFUev1gp9yEwmwcy8SicqKbt&index=3')
-    markup.row(btn1)
-    btn2=types.InlineKeyboardButton('Удалить файл',callback_data='delete')
-    btn3=types.InlineKeyboardButton('Изменить файл',callback_data='edit')
-    markup.row(btn2,btn3)
-    bot.reply_to(message,'Откуда браись знания', reply_markup=markup)
+    figures.append(total_sales_fig)
 
-@bot.callback_query_handler(func= lambda callback:True)
-def callback_message(callback):
-    if callback.data == 'delete':
-        bot.delete_message(callback.message.chat.id, callback.message.message_id-1)
-    elif callback.data == 'edit':
-        bot.edit_message_text('Edit text',callback.message.chat.id, callback.message.message_id)
+    figures.append(sales_by_category_fig)
 
+    figures.append(quantity_sold_fig)
 
-@bot.message_handler(commands=['player'])
-def main(message):
-    bot.send_message(message.chat.id,message)
+    figures.append(monthly_sales_fig)
 
-@bot.message_handler(commands=['start','main','hello'])
-def main(message):
-    bot.send_message(message.chat.id,f'Привет {message.from_user.first_name} {message.from_user.last_name}')
+    figures.append(top_products_fig)
 
-@bot.message_handler(commands=['help'])
-def main(message):
-    bot.send_message(message.chat.id,' <b>Инструкция</b> <em>для</em> <u>начинающих</u>', parse_mode='html')
+    print(f"Generated {len(figures)} figures.") # Отладочное сообщение
 
-@bot.message_handler()
-def info(message):
-    if message.text.lower() == 'привет':
-        bot.send_message(message.chat.id, f'Привет {message.from_user.first_name} {message.from_user.last_name}')
-    elif message.text.lower() == 'id':
-        bot.reply_to(message, f'ID:{message.from_user.id} ')
+ # Сохранение графиков в HTML
+    html_files = []
+    for i, fig in enumerate(figures):
+        try:
+            # Генерация HTML файла
+            html_bytes = pio.to_html(fig, full_html=False) # Генерация HTML
+            html_files.append(io.BytesIO(html_bytes.encode('utf8')))
+            print(f'HTML файл graph_{i + 1}.html успешно сгенерирован.')
+        except Exception as e:
+            print(f'Ошибка при обработке фигуры {i}: {e}')
+    return html_files
+# Обработчик команды /start
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text('Привет! Отправьте мне CSV файл с данными о продажах.')
+# Обработчик получения файла
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+ # Получаем файл
+    file = await update.message.document.get_file()
+# Загрузка файла
+    await file.download_to_drive('data.csv')
+ # Генерация графиков
+    html_files = generate_graphs_from_csv('data.csv')
+ # Отправка графиков пользователю
+    for i, html in enumerate(html_files):
+        html.seek(0)
+        print(f"Sending HTML file {i + 1}...") # Отладочное сообщение
+        try:
+            await update.message.reply_document(document=InputFile(html, filename=f'graph_{i + 1}.html'))
+            print(f"HTML file {i + 1} sent successfully.")
+            await asyncio.sleep(1)
+        except Exception as e:
+            print(f"Failed to send HTML file {i + 1}: {e}")
+def main():
+    TOKEN = '7279406794:AAHEuoNDMpkOC6cKRwP2emufano1Df5X1eM'
 
+    app = ApplicationBuilder().token(TOKEN).build()
 
-bot.polling(none_stop=True)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.Document.MimeType("text/csv"), handle_document))
+
+    app.run_polling()
+
+if __name__ == '__main__':
+    main()
